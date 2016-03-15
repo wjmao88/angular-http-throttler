@@ -1,86 +1,73 @@
 /**
  * @license HTTP Throttler Module for AngularJS
+ *
+ * Sourced from https://github.com/mikepugh/angular-http-throttler
+ *
  * (c) 2013 Mike Pugh
  * License: MIT
  */
-(function() {
-  "use strict";  angular.module('http-throttler', ['http-interceptor-buffer'])
-  .provider('httpThrottler', function() {
-    var maxConcurrentRequests = 10;
-    this.maxConcurrentRequests = function(val) {
-      maxConcurrentRequests = val || maxConcurrentRequests;
-      return maxConcurrentRequests;
-    };
-    this.$get = [
-      '$q', '$log', 'httpBuffer', function($q, $log, httpBuffer) {
-        var reqCount, service;
 
-        reqCount = 0;
+angular.module('lo.utilities')
+.factory('httpThrottler', function ($q, httpBuffer) {
+  'use strict';
 
-        var increment = function(config){
-          reqCount++;
-          return config || $q.when(config);
-        };
-
-        var decrement = function(){
-          reqCount--;
-          httpBuffer.retryOne();
-        };
-		
-        service = {
-          request: function(config) {
-            var deferred;
-
-            $log.debug("Incoming Request - current count = " + reqCount);
-            if (reqCount >= maxConcurrentRequests) {
-              $log.warn("Too many requests");
-              deferred = $q.defer();
-              httpBuffer.append(deferred);
-              return deferred.promise.then(function(){
-                return increment(config);
-              });
-            } else {
-              return increment(config);
-            }
-          },
-          response: function(response) {
-            decrement();
-            $log.debug("Response received from server - new count = " + reqCount);
-            return response || $q.when(response);
-          },
-          responseError: function(rejection) {
-            decrement();
-            $log.debug("ResponseError received from server - new count = " + reqCount);			
-            return $q.reject(rejection);
-          }
-        };
-        return service;
-      }
-    ];
-  });
-  angular.module('http-interceptor-buffer', []).factory('httpBuffer', [
-    '$log', function($log) {
-      var buffer, service;
-
-      buffer = [];
-
-      service = {
-        append: function(config, deferred) {
-          $log.debug('Adding to buffer, current buffer size = ' + buffer.length);
-          return buffer.push(deferred);
-        },
-        retryOne: function() {
-          var deferred;
-
-          if (buffer.length > 0) {
-            deferred = buffer.shift();
-            $log.debug('Removed from buffer, new buffer size = ' + buffer.length);
-            deferred.resolve();
-          }
-        }
-      };
-      return service;
+  var service = {
+    ongoingRequestCount: function(){
+      return httpBuffer.reqCount;
+    },
+    setMaxConcurrentRequests: function(val){
+      return httpBuffer.maxConcurrentRequests =
+        val || httpBuffer.maxConcurrentRequests;
+    },
+    request: function(config) {
+      var deferred = $q.defer();
+      httpBuffer.append(deferred);
+      return deferred.promise.then(function(){
+        return config;
+      });
+    },
+    response: function(response) {
+      httpBuffer.requestComplete();
+      return $q.when(response);
+    },
+    responseError: function(rejection) {
+      httpBuffer.requestComplete();
+      return $q.reject(rejection);
     }
-  ]);
+  };
 
-}).call(this);
+  return service;
+})
+.factory('httpBuffer', function() {
+  'use strict';
+
+  var service = {
+    maxConcurrentRequests: 5,
+    buffer: [],
+    reqCount: 0,
+
+    append: function(deferred){
+      service.buffer.push(deferred);
+      service.retryOne();
+    },
+
+    requestComplete: function(){
+      service.reqCount--;
+      service.retryOne();
+    },
+
+    retryOne: function(){
+      if (service.reqCount < service.maxConcurrentRequests) {
+        var deferred = service.buffer.shift();
+        if (deferred) {
+          service.reqCount++;
+          deferred.resolve();
+        }
+      } else {
+        console.warn('Too many requests');
+      }
+    }
+  };
+
+  return service;
+});
